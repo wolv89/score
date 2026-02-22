@@ -9,14 +9,26 @@ import (
 // 0000-0000 0000-0000 0000-0000 0000-0000
 
 type LiveSet uint32
+type WonSet uint8
 
 const (
+	// Hard coded, given 4-bit encoding, and the need for a winning tiebreak to be 1 above the target
+	// Could allow this limit to be 14, but 12 seems reasonable
+	GAMES_LIMIT   = 12
+	GAMES_DEFAULT = 6
+	GAMES_MINIMUM = 1
+
 	POINT_LEFT  = LiveSet(1 << 8)
 	POINT_RIGHT = LiveSet(1)
 	POINT_RESET = 0xFFFF0000
 
 	GAME_LEFT  = LiveSet(1 << 20)
 	GAME_RIGHT = LiveSet(1 << 16)
+
+	DUECE = uint8(3)
+
+	META_DONE               = LiveSet(1 << 31)
+	META_GAMES_TARGET_SHIFT = 24
 )
 
 var Scores = [5]string{
@@ -27,8 +39,38 @@ var Scores = [5]string{
 	"Ad",
 }
 
+func NewLiveSet(gamesTarget uint) LiveSet {
+
+	if gamesTarget < GAMES_MINIMUM || gamesTarget > GAMES_LIMIT {
+		gamesTarget = GAMES_DEFAULT
+	}
+
+	ls := LiveSet(gamesTarget << META_GAMES_TARGET_SHIFT)
+
+	return ls
+
+}
+
 func (ls LiveSet) PointLeft() LiveSet {
 
+	scoreLeft, scoreRight := ls.PointScores()
+
+	if scoreLeft == DUECE {
+		if scoreRight < DUECE {
+			// 40-15, 40-30, etc
+			return ls.GameLeft()
+		} else if scoreRight > DUECE {
+			// Right was in advantage, return to duece
+			ls -= POINT_RIGHT
+			return ls
+		}
+		// Otherwise fallthrough to simple advantage
+	} else if scoreLeft > DUECE {
+		// From advantage
+		return ls.GameLeft()
+	}
+
+	// Base case, simple point won
 	ls += POINT_LEFT
 	return ls
 
@@ -36,6 +78,24 @@ func (ls LiveSet) PointLeft() LiveSet {
 
 func (ls LiveSet) PointRight() LiveSet {
 
+	scoreLeft, scoreRight := ls.PointScores()
+
+	if scoreRight == DUECE {
+		if scoreLeft < DUECE {
+			// 15-40, 30-40, etc
+			return ls.GameRight()
+		} else if scoreLeft > DUECE {
+			// Left was in advantage, return to duece
+			ls -= POINT_LEFT
+			return ls
+		}
+		// Otherwise fallthrough to simple advantage
+	} else if scoreRight > DUECE {
+		// From advantage
+		return ls.GameRight()
+	}
+
+	// Base case, simple point won
 	ls += POINT_RIGHT
 	return ls
 
@@ -49,10 +109,13 @@ func (ls LiveSet) GameRight() LiveSet {
 	return (ls & POINT_RESET) + GAME_RIGHT
 }
 
+func (ls LiveSet) PointScores() (uint8, uint8) {
+	return uint8(ls >> 8), uint8(ls)
+}
+
 func (ls LiveSet) Score() string {
 
-	scoreLeft := uint8(ls >> 8)
-	scoreRight := uint8(ls)
+	scoreLeft, scoreRight := ls.PointScores()
 
 	var b strings.Builder
 	b.Grow(5)
@@ -74,8 +137,7 @@ func (ls LiveSet) Render() string {
 	metaData := uint8(ls >> 24)
 	setScore := uint8(ls >> 16)
 
-	scoreLeft := uint8(ls >> 8)
-	scoreRight := uint8(ls)
+	scoreLeft, scoreRight := ls.PointScores()
 
 	var b strings.Builder
 
